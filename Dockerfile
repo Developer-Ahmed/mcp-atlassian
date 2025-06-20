@@ -1,49 +1,51 @@
-# Use a Python image with uv pre-installed
-FROM ghcr.io/astral-sh/uv:python3.10-alpine AS uv
+# Stage 1: Use a base Python image with uv installed
+FROM python:3.10-alpine AS build
 
-# Install the project into `/app`
+# Install build dependencies
+RUN apk add --no-cache curl build-base git
+
+# Install uv manually (since you're not using Astral's BuildKit image anymore)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create app dir
 WORKDIR /app
 
-# Enable bytecode compilation
-ENV UV_COMPILE_BYTECODE=1
+# Copy project files
+COPY pyproject.toml README.md ./
+RUN /root/.cargo/bin/uv lock
 
-# Copy from the cache instead of linking since it's a mounted volume
-ENV UV_LINK_MODE=copy
+# Install dependencies (no dev, frozen env)
+COPY uv.lock ./
+RUN /root/.cargo/bin/uv sync --frozen --no-install-project --no-dev --no-editable
 
-# Generate proper TOML lockfile first
-RUN --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=README.md,target=README.md \
-    uv lock
+# Now copy the source code and install the project
+COPY . /app
+RUN /root/.cargo/bin/uv sync --frozen --no-dev --no-editable
 
-# Install the project's dependencies using the lockfile
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --no-install-project --no-dev --no-editable
-
-# Then, add the rest of the project source code and install it
-ADD . /app
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --no-dev --no-editable
-
-# Remove unnecessary files from the virtual environment before copying
+# Clean unnecessary files
 RUN find /app/.venv -name '__pycache__' -type d -exec rm -rf {} + && \
     find /app/.venv -name '*.pyc' -delete && \
     find /app/.venv -name '*.pyo' -delete && \
     echo "Cleaned up .venv"
 
-# Final stage
+# Stage 2: Minimal runtime image
 FROM python:3.10-alpine
 
-# Create a non-root user 'app'
+# Create a non-root user
 RUN adduser -D -h /home/app -s /bin/sh app
-WORKDIR /app
 USER app
+WORKDIR /app
 
-COPY --from=uv --chown=app:app /app/.venv /app/.venv
+# Copy the virtual environment
+COPY --from=build --chown=app:app /app/.venv /app/.venv
+COPY --from=build --chown=app:app /app /app
 
-# Place executables in the environment at the front of the path
+# Add venv to PATH
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Expose the default port (9000 or set your own)
+EXPOSE 9000
+
+# Use the HTTP or SSE transport as needed
 ENTRYPOINT ["mcp-atlassian"]
+
