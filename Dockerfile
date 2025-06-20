@@ -42,8 +42,9 @@ COPY --from=uv --chown=app:app /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Expose default port
-EXPOSE 9000
+EXPOSE $PORT
 
 # Entrypoint
-ENTRYPOINT ["mcp-atlassian"]
+ENTRYPOINT ["sh", "-c", "mcp-atlassian --transport streamable-http --port $PORT"]
+
 
