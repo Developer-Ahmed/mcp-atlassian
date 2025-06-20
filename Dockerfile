@@ -1,51 +1,56 @@
-# Stage 1: Use a base Python image with uv installed
-FROM python:3.10-alpine AS build
+# Use a Python image with uv pre-installed
+FROM ghcr.io/astral-sh/uv:python3.10-alpine AS uv
 
-# Install build dependencies
-RUN apk add --no-cache curl build-base git
-
-# Install uv manually (since you're not using Astral's BuildKit image anymore)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Create app dir
+# Install the project into `/app`
 WORKDIR /app
 
-# Copy project files
-COPY pyproject.toml README.md ./
-RUN /root/.cargo/bin/uv lock
+# Enable bytecode compilation
+ENV UV_COMPILE_BYTECODE=1
 
-# Install dependencies (no dev, frozen env)
-COPY uv.lock ./
-RUN /root/.cargo/bin/uv sync --frozen --no-install-project --no-dev --no-editable
+# Copy from the cache instead of linking since it's a mounted volume
+ENV UV_LINK_MODE=copy
 
-# Now copy the source code and install the project
-COPY . /app
-RUN /root/.cargo/bin/uv sync --frozen --no-dev --no-editable
+# Generate proper TOML lockfile first
+RUN --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=README.md,target=README.md \
+    uv lock
 
-# Clean unnecessary files
+# Install the project's dependencies using the lockfile
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    uv sync --frozen --no-install-project --no-dev --no-editable
+
+# Then, add the rest of the project source code and install it
+ADD . /app
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    uv sync --frozen --no-dev --no-editable
+
+# Remove unnecessary files from the virtual environment before copying
 RUN find /app/.venv -name '__pycache__' -type d -exec rm -rf {} + && \
     find /app/.venv -name '*.pyc' -delete && \
     find /app/.venv -name '*.pyo' -delete && \
     echo "Cleaned up .venv"
 
-# Stage 2: Minimal runtime image
+# Final stage: minimal runtime image
 FROM python:3.10-alpine
 
-# Create a non-root user
+# Create a non-root user 'app'
 RUN adduser -D -h /home/app -s /bin/sh app
-USER app
 WORKDIR /app
+USER app
 
-# Copy the virtual environment
-COPY --from=build --chown=app:app /app/.venv /app/.venv
-COPY --from=build --chown=app:app /app /app
+# Copy virtual environment and project code
+COPY --from=uv --chown=app:app /app/.venv /app/.venv
+COPY --from=uv --chown=app:app /app /app
 
-# Add venv to PATH
+# Place executables in the environment at the front of the path
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Expose the default port (9000 or set your own)
+# Set default port (Railway injects $PORT, but this helps locally too)
 EXPOSE 9000
 
-# Use the HTTP or SSE transport as needed
+# Entrypoint: you can change the transport if you want
 ENTRYPOINT ["mcp-atlassian"]
 
