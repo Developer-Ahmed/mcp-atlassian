@@ -41,9 +41,6 @@ COPY --from=uv --chown=app:app /app/.venv /app/.venv
 # Set PATH to use virtual environment
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Expose default port
-EXPOSE $PORT
-
 # Entrypoint
 ENTRYPOINT ["sh", "-c", "mcp-atlassian --transport streamable-http --port $PORT"]
 
